@@ -38,6 +38,7 @@ import spack
 from spack.spec import Spec
 from spack.error import SpackError
 
+import spack.config
 
 def _check_concrete(spec):
     """If the spec is not concrete, raise a ValueError"""
@@ -47,7 +48,7 @@ def _check_concrete(spec):
 
 class DirectoryLayout(object):
     """A directory layout is used to associate unique paths with specs.
-       Different installations are going to want differnet layouts for their
+       Different installations are going to want different layouts for their
        install, and they can use this to customize the nesting structure of
        spack installs.
     """
@@ -75,6 +76,13 @@ class DirectoryLayout(object):
         raise NotImplementedError()
 
 
+    def prefix_for_spec(self, spec):
+        """Implemented by subclasses to return the install root for the
+           provided spec.
+        """
+        raise NotImplementedError()
+
+        
     def relative_path_for_spec(self, spec):
         """Implemented by subclasses to return a relative path from the install
            root to a unique location for the provided spec."""
@@ -126,9 +134,10 @@ class DirectoryLayout(object):
         """Return an absolute path from the root to a directory for the spec."""
         _check_concrete(spec)
 
-        path = self.relative_path_for_spec(spec)
-        assert(not path.startswith(self.root))
-        return os.path.join(self.root, path)
+        prefix = self.prefix_for_spec(spec)
+        relative_path = self.relative_path_for_spec(spec)
+
+        return os.path.join(prefix, relative_path)
 
 
     def remove_path_for_spec(self, spec):
@@ -203,11 +212,50 @@ class SpecHashDirectoryLayout(DirectoryLayout):
     def hidden_file_paths(self):
         return ('.spec', '.extensions')
 
+    _default_prefix_format = '${ARCHITECTURE}/${COMPILER}/$_$@$+$#'
+    _customizable_dirs = [ 'prefix', 'prefix_format', 'srcdir', 'builddir' ]
 
+    def create_format_for_spec(self, spec):
+        format = {}
+        for dir in self._customizable_dirs:
+            format[dir] = 'default'
+
+        config = spack.config.get_config()
+        for package in config.get_section_names('directories'):
+            if spec.satisfies(package):
+                for dir in self._customizable_dirs:
+                    if config.has_value('directories', package, dir):
+                        format[dir] = config.get_value('directories', package, dir)
+                break
+        
+        return format
+
+
+    _format_cache = {}
+    def format_for_spec(self, spec):
+        """
+        Lookup a dictionary of format string for this spec, which can be 'default'
+        or be overridden by a user's .spackconfig
+        """
+        if not spec in self._format_cache:
+            self._format_cache[spec] = self.create_format_for_spec(spec)
+        return self._format_cache[spec]
+
+
+    def prefix_for_spec(self, spec):
+        _check_concrete(spec)
+        prefix = self.format_for_spec(spec)['prefix']
+        if prefix == 'default':
+            return self.root;
+        return prefix;
+
+        
     def relative_path_for_spec(self, spec):
         _check_concrete(spec)
-        dir_name = spec.format('$_$@$+$#')
-        return join_path(spec.architecture, spec.compiler, dir_name)
+        prefix_format = self.format_for_spec(spec)['prefix_format']
+        if prefix_format == 'default':
+            prefix_format = self._default_prefix_format
+        return spec.format(prefix_format)
 
 
     def write_spec(self, spec, path):
@@ -285,14 +333,23 @@ class SpecHashDirectoryLayout(DirectoryLayout):
         if not os.path.isdir(self.root):
             return []
 
+        prefixes = set([ self.root ])
+        config = spack.config.get_config()
+        for package in config.get_section_names('directories'):
+            if config.has_value('directories', package, 'prefix'):
+                dir = config.get_value('directories', package, 'prefix')
+                if os.path.exists(dir):
+                    prefixes.add(dir)
+        
         specs = []
-        for path in traverse_dirs_at_depth(self.root, 3):
-            arch, compiler, last_dir = path
-            spec_file_path = join_path(
-                self.root, arch, compiler, last_dir, self.spec_file_name)
-            if os.path.exists(spec_file_path):
-                spec = self.read_spec(spec_file_path)
-                specs.append(spec)
+        for prefix in prefixes:
+            for path in traverse_dirs_at_depth(prefix, 3):
+                arch, compiler, last_dir = path
+                spec_file_path = join_path(
+                    prefix, arch, compiler, last_dir, self.spec_file_name)
+                if os.path.exists(spec_file_path):
+                    spec = self.read_spec(spec_file_path)
+                    specs.append(spec)
         return specs
 
 
