@@ -75,17 +75,10 @@ class DirectoryLayout(object):
         """
         raise NotImplementedError()
 
-
-    def prefix_for_spec(self, spec):
-        """Implemented by subclasses to return the install root for the
-           provided spec.
-        """
-        raise NotImplementedError()
-
         
-    def relative_path_for_spec(self, spec):
-        """Implemented by subclasses to return a relative path from the install
-           root to a unique location for the provided spec."""
+    def symlinks_for_spec(self, spec):
+        """Implemented by subclasses to return a list of symlinks that should be
+           pointed at the install location"""
         raise NotImplementedError()
 
 
@@ -132,12 +125,7 @@ class DirectoryLayout(object):
 
     def path_for_spec(self, spec):
         """Return an absolute path from the root to a directory for the spec."""
-        _check_concrete(spec)
-
-        prefix = self.prefix_for_spec(spec)
-        relative_path = self.relative_path_for_spec(spec)
-
-        return os.path.join(prefix, relative_path)
+        raise NotImplementedError()
 
 
     def remove_path_for_spec(self, spec):
@@ -145,7 +133,6 @@ class DirectoryLayout(object):
            Raised RemoveFailedError if something goes wrong.
         """
         path = self.path_for_spec(spec)
-        assert(path.startswith(self.root))
 
         if os.path.exists(path):
             try:
@@ -212,8 +199,8 @@ class SpecHashDirectoryLayout(DirectoryLayout):
     def hidden_file_paths(self):
         return ('.spec', '.extensions')
 
-    _default_prefix_format = '${ARCHITECTURE}/${COMPILER}/$_$@$+$#'
-    _customizable_dirs = [ 'prefix', 'prefix_format', 'srcdir', 'builddir' ]
+    _default_prefix = '${SPACK_INSTALL}/${ARCHITECTURE}/${COMPILER}/$_$@$+$#'
+    _customizable_dirs = [ 'prefix', 'srcdir', 'builddir', 'symlink' ]
 
     def create_format_for_spec(self, spec):
         format = {}
@@ -242,20 +229,30 @@ class SpecHashDirectoryLayout(DirectoryLayout):
         return self._format_cache[spec]
 
 
-    def prefix_for_spec(self, spec):
+    def path_for_spec(self, spec):
         _check_concrete(spec)
         prefix = self.format_for_spec(spec)['prefix']
         if prefix == 'default':
-            return self.root;
-        return prefix;
+            prefix = self._default_prefix
+        return spec.format(prefix)
 
-        
-    def relative_path_for_spec(self, spec):
+
+    def symlinks_for_spec(self, spec):
+        """Read a list of colon-seperated symlink locations out of config.  Also
+           symlink from default install location if we're not installing to the
+           default location"""
         _check_concrete(spec)
-        prefix_format = self.format_for_spec(spec)['prefix_format']
-        if prefix_format == 'default':
-            prefix_format = self._default_prefix_format
-        return spec.format(prefix_format)
+        config = spack.config.get_config()
+
+        links = []
+        for package in config.get_section_names('directories'):
+            if spec.satisfies(package):
+                if config.has_value('directories', package, 'symlink'):
+                    symlink_str = config.get_value('directories', package, 'symlink')
+                    links.extend(symlink_str.split(':'))
+                if config.has_value('directories', package, 'prefix'):
+                    links.append(spec.format(self._default_prefix))
+        return links
 
 
     def write_spec(self, spec, path):

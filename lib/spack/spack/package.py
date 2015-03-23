@@ -658,6 +658,15 @@ class Package(object):
         spack.install_layout.remove_path_for_spec(self.spec)
 
 
+    def remove_symlinks(self):
+        """Removes spack created symlinks, if they still point to the prefix"""
+        symlinks = spack.install_layout.symlinks_for_spec(self.spec)
+        prefix = spack.install_layout.path_for_spec(self.spec)
+        for link in symlinks:
+            if os.path.islink(link) and os.path.realpath(link) == prefix:
+                os.unlink(link)
+
+
     def do_fetch(self):
         """Creates a stage directory and downloads the taball for this package.
            Working directory will be set to the stage directory.
@@ -767,6 +776,19 @@ class Package(object):
         tty.msg("Patched %s" % self.name)
 
 
+    def create_symlinks(self):
+        """Create symlinks from user provides locations to install"""
+        symlinks = spack.install_layout.symlinks_for_spec(self.spec)
+        install_location = spack.install_layout.path_for_spec(self.spec)
+        for link in symlinks:
+            print link
+            if os.path.exists(link) and not os.path.islink(link):
+                continue
+            if os.path.islink(link):
+                os.unlink(link)
+            os.symlink(install_location, link)
+
+
     def do_fake_install(self):
         """Make a fake install directory contaiing a 'fake' file in bin."""
         mkdirp(self.prefix.bin)
@@ -838,6 +860,9 @@ class Package(object):
                 # On successful install, remove the stage.
                 if not keep_stage:
                     self.stage.destroy()
+
+                # Create any symlinks to install location
+                self.create_symlinks()
 
                 # Stop timer.
                 self._total_time = time.time() - start_time
@@ -943,6 +968,7 @@ class Package(object):
 
         # Uninstalling in Spack only requires removing the prefix.
         self.remove_prefix()
+        self.remove_symlinks()
         tty.msg("Successfully uninstalled %s." % self.spec.short_spec)
 
         # Once everything else is done, run post install hooks
