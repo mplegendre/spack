@@ -43,6 +43,7 @@ import multiprocessing
 from urlparse import urlparse, urljoin
 import textwrap
 from StringIO import StringIO
+from sets import Set
 
 import llnl.util.tty as tty
 from llnl.util.link_tree import LinkTree
@@ -64,8 +65,12 @@ from spack.util.web import get_pages
 from spack.util.compression import allowed_archive, extension
 from spack.util.executable import ProcessError
 
+from spack.symlinks import *
+
 """Allowed URL schemes for spack packages."""
 _ALLOWED_URL_SCHEMES = ["http", "https", "ftp", "file", "git"]
+
+installed_package_names = Set()
 
 
 class Package(object):
@@ -868,6 +873,8 @@ class Package(object):
 
         # Once everything else is done, run post install hooks
         spack.hooks.post_install(self)
+
+        installed_package_names.add(self.name)
 
 
     def _sanity_check_install(self):
